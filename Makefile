@@ -7,7 +7,7 @@ LD = gcc
 LDFLAGS = 
 
 mytar all: mytar.o functions.o bytestream.o specialint.o
-	$(LD) $(LDFLAGS) -o mytar mytar.o functions.o bytestream.o specialint.o
+	$(LD) $(LDFLAGS) -o mytar mytar.o functions.o bytestream.o specialint.o -lm
 
 mytar.o: mytar.c
 	$(CC) $(CFLAGS) -c -o mytar.o mytar.c

@@ -46,6 +46,11 @@ struct header *read_header(int fd)
     /* initialize header */
     head = malloc(sizeof(struct header));
 
+    memset(head->name, 0, 101);
+    memset(head->linkname, 0, 100);
+    memset(head->uname, 0, 32);
+    memset(head->gname, 0, 32);
+    memset(head->prefix, 0, 155);
     memset(attribute, 0, 155);
     memset(head_buf, 0, 512);
 
@@ -212,11 +217,25 @@ void list_toc(char *archivefile, char **pathnames,
                        filetime->tm_hour, filetime->tm_min);
 
                 /* path */
-                printf(" %s%s\n", head->prefix, head->name);
+                if (strlen(head->prefix))
+                {
+                    printf(" %s/%s\n", head->prefix, head->name);
+                }
+                else
+                {
+                    printf(" %s\n", head->name);
+                }
             }
             else
             {
-                printf("%s%s\n", head->prefix, head->name);
+                if (strlen(head->prefix))
+                {
+                    printf(" %s/%s\n", head->prefix, head->name);
+                }
+                else
+                {
+                    printf(" %s\n", head->name);
+                }
             }
         }
 
@@ -272,7 +291,7 @@ void create_archive(char **paths, int num_of_files,
     for (i = 0; i < num_of_files; i++)
     {
         /* build header with root path */
-        if ((head = build_header(paths[i])))
+        if ((head = build_header(paths[i])) != NULL)
         {
             /* write header and file contents to output */
             write_header(bs, head);
@@ -286,10 +305,10 @@ void create_archive(char **paths, int num_of_files,
             {
                 printf("%s/\n", paths[i]);
             }
-        }
 
-        /* traverse path with preorder dfs and add every file to archive */
-        preorder_dfs(paths[i], bs, args);
+            /* traverse path with preorder dfs and add every file to archive */
+            preorder_dfs(paths[i], bs, args);
+        }
     }
 
     /* pad end of archive file with 2 blocks of 512 bytes */
@@ -336,11 +355,12 @@ struct header *build_header(char *path)
     int fd, sz, offset;
     char fullpath[1024];
     char buff[100];
+    char *temp;
     char type;
 
     /* initialize header */
     head = malloc(sizeof(struct header));
-    memset(head->name, 0, 100);
+    memset(head->name, 0, 101);
     memset(head->linkname, 0, 100);
     memset(head->uname, 0, 32);
     memset(head->gname, 0, 32);
@@ -348,22 +368,31 @@ struct header *build_header(char *path)
     memset(buff, 0, 100);
 
     /* stat file */
-    lstat(path, &statbuf);
-
-    if (strlen(path) > 98)
+    if (lstat(path, &statbuf) < 0)
     {
-        /* put overflow into prefix */
-        offset = strlen(path) - 98;
+        perror("lstat");
+        return NULL;
+    }
+
+    /* fill header struct */
+    temp = path;
+    offset = 0;
+
+    while ((strlen(path) > 99) &&
+           (offset < (strlen(path) - 99) || *temp != '/'))
+    {
+        offset++;
+        temp++;
+    }
+    if (offset > 0)
+    {
         strncpy(head->prefix, path, offset);
-        strncpy(head->name, path + offset, 98);
+        strncpy(head->name, path + offset + 1, strlen(path) - offset - 1);
     }
     else
     {
         strcpy(head->name, path);
     }
-
-    /* fill header struct */
-    strcat(head->name, "/");
 
     if ((type = get_type(statbuf.st_mode)) != 0)
     {

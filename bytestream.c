@@ -113,7 +113,7 @@ void write_header(struct bytestream *bs, struct header *h)
 
     char byte[12];
     char byte8[8];
-    int i, n;
+    int i, n, checksum;
     char temp;
 
     write_to_stream(bs, h->name, 100);
@@ -180,27 +180,36 @@ void write_header(struct bytestream *bs, struct header *h)
     }
 
     /* gid in octal */
-    memset(byte, 0, 12);
-    i = 0;
-    n = h->gid;
-    while (n != 0)
+    if (h->gid > 2097151)
     {
-        byte[i] = (char)(n % 8) + '0';
-        n = n / 8;
-        i++;
+        /* too big for 7 digit octal */
+        insert_special_int(byte8, 8, (int32_t)h->gid);
+        write_to_stream(bs, byte8, 8);
     }
-    for (i = 0; i < strlen(byte) / 2; i++)
+    else
     {
-        temp = byte[i];
-        byte[i] = byte[strlen(byte) - i - 1];
-        byte[strlen(byte) - i - 1] = temp;
+        memset(byte, 0, 12);
+        i = 0;
+        n = h->gid;
+        while (n != 0)
+        {
+            byte[i] = (char)(n % 8) + '0';
+            n = n / 8;
+            i++;
+        }
+        for (i = 0; i < strlen(byte) / 2; i++)
+        {
+            temp = byte[i];
+            byte[i] = byte[strlen(byte) - i - 1];
+            byte[strlen(byte) - i - 1] = temp;
+        }
+        for (i = 0; i < 7 - strlen(byte); i++)
+        {
+            write_to_stream(bs, "0", 1);
+        }
+        write_to_stream(bs, byte, strlen(byte));
+        write_to_stream(bs, "\0", 1);
     }
-    for (i = 0; i < 7 - strlen(byte); i++)
-    {
-        write_to_stream(bs, "0", 1);
-    }
-    write_to_stream(bs, byte, strlen(byte));
-    write_to_stream(bs, "\0", 1);
 
     /* size in octal */
     memset(byte, 0, 12);
@@ -248,28 +257,8 @@ void write_header(struct bytestream *bs, struct header *h)
     write_to_stream(bs, byte, strlen(byte));
     write_to_stream(bs, "\0", 1);
 
-    /* checksum in octal */
-    memset(byte, 0, 12);
-    i = 0;
-    n = get_chksum(bs, h);
-    while (n != 0)
-    {
-        byte[i] = (char)(n % 8) + '0';
-        n = n / 8;
-        i++;
-    }
-    for (i = 0; i < strlen(byte) / 2; i++)
-    {
-        temp = byte[i];
-        byte[i] = byte[strlen(byte) - i - 1];
-        byte[strlen(byte) - i - 1] = temp;
-    }
-    for (i = 0; i < 7 - strlen(byte); i++)
-    {
-        write_to_stream(bs, "0", 1);
-    }
-    write_to_stream(bs, byte, strlen(byte));
-    write_to_stream(bs, "\0", 1);
+    /* checksum placeholder */
+    write_to_stream(bs, "        ", 8);
 
     write_to_stream(bs, (char *)&h->typeflag, 1);
 
@@ -291,6 +280,35 @@ void write_header(struct bytestream *bs, struct header *h)
     write_to_stream(bs, byte8, 8);
 
     write_to_stream(bs, h->prefix, 155);
+
+    /* checksum in octal */
+    checksum = 0;
+    for (i = 0; i < 512; i++)
+    {
+        checksum += bs->uwblock[i];
+    }
+    memset(byte, 0, 12);
+    i = 0;
+    while (checksum != 0)
+    {
+        byte[i] = (char)(checksum % 8) + '0';
+        checksum = checksum / 8;
+        i++;
+    }
+    for (i = 0; i < strlen(byte) / 2; i++)
+    {
+        temp = byte[i];
+        byte[i] = byte[strlen(byte) - i - 1];
+        byte[strlen(byte) - i - 1] = temp;
+    }
+    for (i = 0; i < 7 - strlen(byte); i++)
+    {
+        bs->uwblock[i + 148] = '0';
+    }
+    for (i = 0; i < strlen(byte); i++)
+    {
+        bs->uwblock[i + 148 + (7 - strlen(byte))] = byte[i];
+    }
 
     if (write(bs->fd, bs->uwblock, 512) == -1)
     {
@@ -366,9 +384,9 @@ void pad_eof(struct bytestream *bs)
             bs (struct bytestream *): output bytestream
     */
 
-    char pad[1028];
+    char pad[1024];
 
-    memset(pad, 0, 1028);
+    memset(pad, 0, 1024);
 
     if (bs->index > 0)
     {
@@ -381,7 +399,7 @@ void pad_eof(struct bytestream *bs)
         bs->index = 0;
     }
 
-    if (write(bs->fd, pad, 1028) == -1)
+    if (write(bs->fd, pad, 1024) == -1)
     {
         perror("write");
         exit(1);
