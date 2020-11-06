@@ -151,7 +151,7 @@ void get_permissions(mode_t mode, char type, char *permissions)
     }
 }
 
-int contains(char **files, int num_of_files, char *filename)
+int contains(char **files, int num_of_files, char *prefix, char *name)
 {
     int i;
     char buf[256];
@@ -160,7 +160,16 @@ int contains(char **files, int num_of_files, char *filename)
 
     for (i = 0; i < num_of_files; i++)
     {
-        strncpy(buf, filename, strlen(files[i]));
+        if (strlen(prefix))
+        {
+            strcpy(buf, prefix);
+            strcat(buf, "/");
+            strncat(buf, name, strlen(files[i]) - strlen(prefix));
+        }
+        else
+        {
+            strncpy(buf, name, strlen(files[i]));
+        }
 
         if (strcmp(files[i], buf) == 0)
         {
@@ -168,6 +177,55 @@ int contains(char **files, int num_of_files, char *filename)
         }
 
         memset(buf, 0, 256);
+    }
+
+    return 0;
+}
+
+int verify_archive(char *filename, uint8_t args)
+{
+    int fd;
+    char buf[512];
+
+    if ((fd = open(filename, O_RDONLY)) < 0)
+    {
+        perror(filename);
+        exit(1);
+    }
+
+    if (read(fd, buf, 512) < 0)
+    {
+        perror("read");
+        exit(1);
+    }
+
+    if ((strncmp(buf + 257, "ustar", 5)))
+    {
+        if (close(fd))
+        {
+            perror("close");
+            exit(1);
+        }
+        return -1;
+    }
+
+    if (args & STRICT_SET)
+    {
+        if (buf[262] != '\0' || strncmp(buf + 263, "00", 2))
+        {
+            if (close(fd))
+            {
+                perror("close");
+                exit(1);
+            }
+            return -1;
+        }
+    }
+
+    if (close(fd))
+    {
+        perror("close");
+        exit(1);
     }
 
     return 0;
@@ -185,6 +243,11 @@ void list_toc(char *archivefile, char **pathnames,
 
     permissions = malloc(10);
 
+    if (verify_archive(archivefile, args) < 0)
+    {
+        exit(1);
+    }
+
     if ((fd = open(archivefile, O_RDONLY)) < 0)
     {
         perror(archivefile);
@@ -193,7 +256,9 @@ void list_toc(char *archivefile, char **pathnames,
 
     while ((head = read_header(fd)))
     {
-        if (contains(pathnames, num_of_files, head->name) || num_of_files == 0)
+        if (contains(pathnames, num_of_files, head->prefix,
+                     head->name) ||
+            num_of_files == 0)
         {
             if (args & VERB_SET)
             {
@@ -252,11 +317,6 @@ void list_toc(char *archivefile, char **pathnames,
     }
 
     free(permissions);
-}
-
-void extract_archive(char *archivefile, uint8_t args)
-{
-    return;
 }
 
 void create_archive(char **paths, int num_of_files,
@@ -410,6 +470,7 @@ struct header *build_header(char *path)
     else
     {
         head->size = 0;
+        strcat(head->name, "/");
     }
 
     head->mtime = statbuf.st_mtime;
@@ -511,4 +572,142 @@ void preorder_dfs(char *path, struct bytestream *bs, uint8_t args)
     }
 
     closedir(dir);
+}
+
+void extract_archive(char *filename, uint8_t options)
+{
+    /*printf("\n filename : %s \n", filename);*/
+    struct bytestream *bs;
+    struct header *head;
+    char buf[512];
+    int fd, rd, offset;
+    int f_in;
+    int remainder;
+    int blocks;
+    char wd[100];
+    char new_dir[512];
+    int i = 0;
+    int check;
+    char *path;
+    char full_link[1024];
+    struct stat temp_stat;
+    /* for every block in archive file:
+        parse header into header struct
+        create new file with info from header struct
+        write file contents into new file
+    */
+
+    if ((f_in = open(filename, O_RDONLY)) < 0)
+    {
+        perror(filename);
+        exit(1);
+    }
+
+    /*init bytestream to~ write contents of tar file */
+    bs = malloc(sizeof(struct bytestream));
+    memset(bs->uwblock, 0, 512);
+    /*path = strtok(filename,"/");*/
+    while (head = read_header(f_in))
+    {
+        /*if((options|STRICT_SET)!(strcmp(hea
+         d->ustar,temp_ustar) && (ustar[6]=='\0')))
+        {
+            
+            perror("invalid header");
+        }*/
+
+        if (options & VERB_SET)
+        {
+            printf("%s\n", head->name);
+        }
+        if (head->typeflag == '5')
+        {
+            /*this is a dirrectory
+            stat(head->name,&temp_stat);
+            if(!(temp_stat.st_mode & F_OK)){
+                mkdir(head->name, S_IRWXU | S_IRWXG | S_IROTH | S_IXOTH);
+            }*/
+            strcpy(new_dir, "");
+
+            strcat(new_dir, "./");
+            strcat(new_dir, &head->name);
+            mkdir(new_dir, S_IRWXU | S_IRWXG | S_IROTH | S_IXOTH);
+        }
+        if (head->typeflag == '2')
+        {
+            /*symbolic link (do not write contents of file)*/
+            if (strlen(head->name) >= 99 && strlen(head->prefix) != 0)
+            {
+                strcpy(full_link, head->prefix);
+                strcat(full_link, head->name);
+            }
+            else
+            {
+                strcpy(full_link, head->name);
+            }
+            if (symlink(full_link, head->linkname) != 0)
+            {
+                perror("symlink error");
+                exit(1);
+            }
+        }
+
+        offset = head->size + (512 - (head->size % 512));
+
+        if (head->typeflag != '5')
+        {
+
+            /*not dirrectory write contents to file */
+            strcpy(new_dir, "");
+            strcpy(new_dir, "./");
+            strcat(new_dir, &head->name);
+            /*new_dir[strlen(new_dir)-1]='\0';*/
+            /*fprintf(stderr,"trying to create file with path : %s", new_dir);*/
+            if ((fd = open(new_dir, O_WRONLY | O_CREAT, head->mode)) < 0)
+            {
+                perror(new_dir);
+            }
+
+            bs = malloc(sizeof(struct bytestream));
+            bs->index = 0;
+
+            bs->fd = fd;
+            /*calculate the number of full blocks*/
+            blocks = head->size / 512;
+            /*calculat the remaining bytes*/
+            remainder = head->size % 512;
+
+            while (i < blocks)
+            {
+                /* read block of file into buffer*/
+                if ((rd = read(f_in, buf, 512)) < 0)
+                {
+                    perror(filename);
+                    exit(1);
+                }
+                /*write contents of block to stream*/
+                write_to_stream(bs, buf, 512);
+                i++;
+            }
+
+            /*read contents remainder of file*/
+            rd = read(f_in, buf, remainder);
+            write_to_stream(bs, buf, remainder);
+
+            /*write remaing contents of stream to file */
+            if (bs->index > 0)
+            {
+                /*write remaining values in stream to file*/
+                if (write(bs->fd, bs->uwblock, bs->index) == -1)
+                {
+                    perror("write");
+                    exit(1);
+                }
+                memset(bs->uwblock, 0, bs->index);
+            }
+            /* attempt to read remaining null bits in block*/
+            read(f_in, buf, 512 - remainder);
+        }
+    }
+    close(fd);
 }
