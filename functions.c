@@ -787,10 +787,12 @@ void skip_entry(struct header *head, int f_in)
     read(f_in, buf, 512 - remainder);
 }
 
-void extract_archive(char *filename, uint8_t options, char **filenames, int argc)
+void extract_archive(char *filename, uint8_t options,
+                     char **filenames, int argc)
 {
-    /*this function loops through the entries in the archive and decides which ones to skip based of
-     of the filenames argument*/
+    /*this function loops through the entries in the archive and decides
+      which ones to skip based of
+      of the filenames argument*/
     struct header *head;
     int f_in;
 
@@ -812,7 +814,6 @@ void extract_archive(char *filename, uint8_t options, char **filenames, int argc
         {
             /*skip entry*/
             skip_entry(head, f_in);
-            fprintf(stderr, "so skipping with name: %s \n", head->name);
         }
     }
     close(f_in);
