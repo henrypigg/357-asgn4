@@ -574,28 +574,225 @@ void preorder_dfs(char *path, struct bytestream *bs, uint8_t args)
     closedir(dir);
 }
 
-void extract_archive(char *filename, uint8_t options)
+void extract_entry(struct header *head, int f_in, uint8_t options)
 {
-    /*printf("\n filename : %s \n", filename);*/
-    struct bytestream *bs;
-    struct header *head;
-    char buf[512];
-    int fd, rd, offset;
-    int f_in;
-    int remainder;
-    int blocks;
-    char wd[100];
-    char new_dir[512];
-    int i = 0;
-    int check;
-    char *path;
     char full_link[1024];
+    /*printf("starting extract entry \n");*/
+    if (options & VERB_SET)
+    {
+        printf("%s\n", head->name);
+    }
+    if (head->typeflag == '5')
+    {
+        /*this is a dirrectory*/
+        extract_dir(head);
+    }
+
+    if (head->typeflag == '0' || head->typeflag == '\0')
+    {
+        /*not dirrectory write contents to file */
+        extract_file(head, f_in);
+    }
+
+    if (head->typeflag == '2')
+    {
+        /*symbolic link (do not write contents of file)*/
+        extract_link(head);
+    }
+}
+
+void extract_link(struct header *head)
+{
+    char buf[512];
+    char full_link[100];
+    if (strlen(head->name) > 99 && strlen(head->prefix) != 0)
+    {
+        strcpy(full_link, head->prefix);
+        strcat(full_link, "/");
+        strcat(full_link, head->name);
+    }
+    else
+    {
+        strcpy(full_link, head->name);
+    }
+    readlink(head->linkname, buf, 512);
+    if (symlink(full_link, buf) != 0)
+    {
+        perror("symlink error");
+        exit(1);
+    }
+}
+
+void extract_dir(struct header *head)
+{
     struct stat temp_stat;
-    /* for every block in archive file:
-        parse header into header struct
-        create new file with info from header struct
-        write file contents into new file
-    */
+    char new_dir[256];
+    if (strlen(head->prefix))
+    {
+        strcpy(new_dir, "");
+        strncat(new_dir, head->prefix, strlen(head->prefix));
+        strncat(new_dir, "/", 1);
+        strncat(new_dir, head->name, strlen(head->name));
+    }
+    else
+    {
+        strcpy(new_dir, "");
+        strncat(new_dir, head->name, strlen(head->name));
+    }
+    /*printf("start extract dir");*/
+    stat(new_dir, &temp_stat);
+    if (!(temp_stat.st_mode & F_OK))
+    {
+        mkdir(new_dir, S_IRWXU | S_IRWXG | S_IROTH | S_IXOTH);
+    }
+    else
+    {
+        perror("cant create directory");
+    }
+}
+
+void create_extra_dir(char extra_dirs[512])
+{
+    char delimiter[] = "/";
+    struct stat temp_stat;
+    char temp_path[512];
+    char path[512];
+
+    strcpy(path, extra_dirs);
+    char *ptr = strtok(path, delimiter);
+    strcpy(temp_path, "");
+
+    while (ptr != NULL)
+    {
+
+        strcat(temp_path, ptr);
+
+        /*check if dirrectory exists*/
+        stat(temp_path, &temp_stat);
+        if (!(S_ISDIR(temp_stat.st_mode)) && strcmp(temp_path, extra_dirs) != 0)
+        {
+            /*director does not exitst ... create new dir */
+            /*fprintf(stderr, "making new dir %s \n", ptr);*/
+            mkdir(temp_path, S_IRWXU | S_IRWXG | S_IROTH | S_IXOTH);
+        }
+        strcat(temp_path, "/");
+
+        ptr = strtok(NULL, delimiter);
+    }
+}
+
+void extract_file(struct header *head, int f_in)
+{
+    char new_dir[512];
+    struct bytestream *bs;
+    int remainder;
+    char buf[512];
+    int blocks;
+    int i, rd, fd;
+    i = 0;
+    bs = malloc(sizeof(struct bytestream));
+    memset(bs->uwblock, 0, 512);
+    if (strlen(head->prefix))
+    {
+        strcpy(new_dir, "");
+        strncat(new_dir, head->prefix, strlen(head->prefix));
+        strcat(new_dir, "/");
+        strncat(new_dir, head->name, strlen(head->name));
+    }
+    else
+    {
+        strcpy(new_dir, "");
+        strncat(new_dir, head->name, strlen(head->name));
+    }
+    /*fprintf(stderr, "extract_file : %s \n", new_dir);*/
+
+    /*fprintf(stderr,"trying to create file with path : %s \n", new_dir);*/
+    create_extra_dir(new_dir);
+    if ((fd = open(new_dir, O_WRONLY | O_CREAT | O_TRUNC, head->mode)) < 0)
+    {
+        perror(new_dir);
+    }
+    bs->index = 0;
+
+    bs->fd = fd;
+
+    /*calculate the number of full blocks*/
+    blocks = head->size / 512;
+    /*calculat the remaining bytes*/
+    remainder = head->size % 512;
+    i = 0;
+    while (i < blocks)
+    {
+        /* read block of file into buffer*/
+        if ((rd = read(f_in, buf, 512)) < 0)
+        {
+            perror(f_in);
+            exit(1);
+        }
+        /*write contents of block to stream*/
+        write_to_stream(bs, buf, 512);
+        i++;
+    }
+
+    /*read contents remainder of file*/
+    rd = read(f_in, buf, remainder);
+    write_to_stream(bs, buf, remainder);
+
+    /*write remaing contents of stream to file */
+    if (bs->index > 0)
+    {
+        /*write remaining values in stream to file*/
+        if (write(bs->fd, bs->uwblock, bs->index) == -1)
+        {
+            perror("write");
+            exit(1);
+        }
+        memset(bs->uwblock, 0, bs->index);
+    }
+    /* attempt to read remaining null bits in block*/
+    read(f_in, buf, 512 - remainder);
+}
+
+void skip_entry(struct header *head, int f_in)
+{
+    int remainder;
+    char buf[512];
+    int blocks;
+    int i, rd, fd;
+    /*fprintf("skiping entry: %s", head->name);*/
+    if (head->typeflag == '5' || head->typeflag == '2')
+    {
+        return;
+    }
+    /*calculate the number of full blocks*/
+    blocks = head->size / 512;
+    /*calculat the remaining bytes*/
+    remainder = head->size % 512;
+    while (i < blocks)
+    {
+        /* read block of file into buffer*/
+        if ((rd = read(f_in, buf, 512)) == -1)
+        {
+            perror(f_in);
+            exit(1);
+        }
+
+        i++;
+    }
+
+    /*read contents remainder of file*/
+    rd = read(f_in, buf, remainder);
+
+    /* attempt to read remaining null bits in block*/
+    read(f_in, buf, 512 - remainder);
+}
+
+void extract_archive(char *filename, uint8_t options, char **filenames, int argc)
+{
+    /*this function loops through the entries in the archive and decides which ones to skip based of
+     of the filenames argument*/
+    struct header *head;
+    int f_in;
 
     if ((f_in = open(filename, O_RDONLY)) < 0)
     {
@@ -603,111 +800,20 @@ void extract_archive(char *filename, uint8_t options)
         exit(1);
     }
 
-    /*init bytestream to~ write contents of tar file */
-    bs = malloc(sizeof(struct bytestream));
-    memset(bs->uwblock, 0, 512);
-    /*path = strtok(filename,"/");*/
     while (head = read_header(f_in))
     {
-        /*if((options|STRICT_SET)!(strcmp(hea
-         d->ustar,temp_ustar) && (ustar[6]=='\0')))
+        if ((options | LIST_SET) && contains(filenames,
+                                             argc, head->prefix, head->name) ||
+            argc == 0)
         {
-            
-            perror("invalid header");
-        }*/
-
-        if (options & VERB_SET)
-        {
-            printf("%s\n", head->name);
+            extract_entry(head, f_in, options);
         }
-        if (head->typeflag == '5')
+        else
         {
-            /*this is a dirrectory
-            stat(head->name,&temp_stat);
-            if(!(temp_stat.st_mode & F_OK)){
-                mkdir(head->name, S_IRWXU | S_IRWXG | S_IROTH | S_IXOTH);
-            }*/
-            strcpy(new_dir, "");
-
-            strcat(new_dir, "./");
-            strcat(new_dir, &head->name);
-            mkdir(new_dir, S_IRWXU | S_IRWXG | S_IROTH | S_IXOTH);
-        }
-        if (head->typeflag == '2')
-        {
-            /*symbolic link (do not write contents of file)*/
-            if (strlen(head->name) >= 99 && strlen(head->prefix) != 0)
-            {
-                strcpy(full_link, head->prefix);
-                strcat(full_link, head->name);
-            }
-            else
-            {
-                strcpy(full_link, head->name);
-            }
-            if (symlink(full_link, head->linkname) != 0)
-            {
-                perror("symlink error");
-                exit(1);
-            }
-        }
-
-        offset = head->size + (512 - (head->size % 512));
-
-        if (head->typeflag != '5')
-        {
-
-            /*not dirrectory write contents to file */
-            strcpy(new_dir, "");
-            strcpy(new_dir, "./");
-            strcat(new_dir, &head->name);
-            /*new_dir[strlen(new_dir)-1]='\0';*/
-            /*fprintf(stderr,"trying to create file with path : %s", new_dir);*/
-            if ((fd = open(new_dir, O_WRONLY | O_CREAT, head->mode)) < 0)
-            {
-                perror(new_dir);
-            }
-
-            bs = malloc(sizeof(struct bytestream));
-            bs->index = 0;
-
-            bs->fd = fd;
-            /*calculate the number of full blocks*/
-            blocks = head->size / 512;
-            /*calculat the remaining bytes*/
-            remainder = head->size % 512;
-
-            while (i < blocks)
-            {
-                /* read block of file into buffer*/
-                if ((rd = read(f_in, buf, 512)) < 0)
-                {
-                    perror(filename);
-                    exit(1);
-                }
-                /*write contents of block to stream*/
-                write_to_stream(bs, buf, 512);
-                i++;
-            }
-
-            /*read contents remainder of file*/
-            rd = read(f_in, buf, remainder);
-            write_to_stream(bs, buf, remainder);
-
-            /*write remaing contents of stream to file */
-            if (bs->index > 0)
-            {
-                /*write remaining values in stream to file*/
-                if (write(bs->fd, bs->uwblock, bs->index) == -1)
-                {
-                    perror("write");
-                    exit(1);
-                }
-                memset(bs->uwblock, 0, bs->index);
-            }
-            /* attempt to read remaining null bits in block*/
-            read(f_in, buf, 512 - remainder);
+            /*skip entry*/
+            skip_entry(head, f_in);
+            fprintf(stderr, "so skipping with name: %s \n", head->name);
         }
     }
-    close(fd);
+    close(f_in);
 }

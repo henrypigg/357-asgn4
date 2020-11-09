@@ -76,8 +76,7 @@ int main(int argc, char *argv[])
 
     options = parse_options(argv[1]);
 
-    if (!((options & CREATE_SET) || (options & TOC_SET)
-                                 || (options & EXTRACT_SET)))
+    if (!((options & CREATE_SET) || (options & TOC_SET) || (options & EXTRACT_SET)))
     {
         perror("you must choose one of the 'ctx' options");
         printf("usage: [ctxSp[f tarfile]] [file1 [ file2 [...] ] ]\n");
@@ -106,7 +105,12 @@ int main(int argc, char *argv[])
 
     if (options & EXTRACT_SET)
     {
-        extract_archive(argv[2], options);
+        for (i = 3; i < argc; i++)
+        {
+            filenames[i - 3] = malloc(strlen(argv[i]));
+            strcpy(filenames[i - 3], argv[i]);
+        }
+        extract_archive(argv[2], options, filenames, argc - 3);
     }
 
     return 0;
