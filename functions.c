@@ -21,6 +21,16 @@
 
 void preorder_dfs(char *, struct bytestream *, uint8_t);
 
+void extract_dir(struct header *);
+
+void extract_entry(struct header *, int, uint8_t);
+
+void extract_file(struct header *, int);
+
+void skip_entry(struct header *, int);
+
+void extract_link(struct header *head);
+
 struct header *build_header(char *);
 
 int32_t read_octal(char *octal, int size)
@@ -43,14 +53,6 @@ struct header *read_header(int fd)
     char attribute[155];
     struct header *head;
 
-    /* initialize header */
-    head = malloc(sizeof(struct header));
-
-    memset(head->name, 0, 101);
-    memset(head->linkname, 0, 100);
-    memset(head->uname, 0, 32);
-    memset(head->gname, 0, 32);
-    memset(head->prefix, 0, 155);
     memset(attribute, 0, 155);
     memset(head_buf, 0, 512);
 
@@ -66,6 +68,15 @@ struct header *read_header(int fd)
     {
         return NULL;
     }
+
+    /* initialize header */
+    head = malloc(sizeof(struct header));
+
+    memset(head->name, 0, 101);
+    memset(head->linkname, 0, 100);
+    memset(head->uname, 0, 32);
+    memset(head->gname, 0, 32);
+    memset(head->prefix, 0, 155);
 
     strncpy(head->name, head_buf, 100); /* copy filename from header */
 
@@ -274,12 +285,14 @@ void list_toc(char *archivefile, char **pathnames,
                 filetime = localtime(&head->mtime);
 
                 /* permissions, owner, group, and size */
-                printf("%s %-17s %8d ", permissions, owner_group, head->size);
+                printf("%s %-17s %8d ", permissions, owner_group,
+                                                 (int)head->size);
 
                 /* time */
-                printf("%04d-%02d-%02d %02d:%02d", 1900 + filetime->tm_year,
-                       filetime->tm_mon + 1, filetime->tm_mday,
-                       filetime->tm_hour, filetime->tm_min);
+                printf("%04d-%02d-%02d %02d:%02d", 1900 +
+                       (int)filetime->tm_year,
+                       (int)filetime->tm_mon + 1, (int)filetime->tm_mday,
+                       (int)filetime->tm_hour, (int)filetime->tm_min);
 
                 /* path */
                 if (strlen(head->prefix))
@@ -331,9 +344,8 @@ void create_archive(char **paths, int num_of_files,
     */
 
     struct bytestream *bs;
-    struct stat statbuf;
     struct header *head;
-    int fd, fd2, i;
+    int fd, i;
 
     /* open archive file */
     if ((fd = open(filename, (O_WRONLY | O_CREAT | O_TRUNC),
@@ -367,6 +379,7 @@ void create_archive(char **paths, int num_of_files,
                 printf("%s/\n", paths[i]);
             }
 
+            free(head);
             /* traverse path with preorder dfs and add every file to archive */
             preorder_dfs(paths[i], bs, args);
         }
@@ -374,6 +387,8 @@ void create_archive(char **paths, int num_of_files,
 
     /* pad end of archive file with 2 blocks of 512 bytes */
     pad_eof(bs);
+
+    free(bs);
 }
 
 char get_type(mode_t mode)
@@ -413,8 +428,7 @@ struct header *build_header(char *path)
     struct stat statbuf;
     struct passwd *pws;
     struct group *grp;
-    int fd, sz, offset;
-    char fullpath[1024];
+    int sz, offset;
     char buff[100];
     char *temp;
     char type;
@@ -565,6 +579,8 @@ void preorder_dfs(char *path, struct bytestream *bs, uint8_t args)
                 {
                     printf("%s/\n", new_path);
                 }
+
+                free(head);
             }
 
             /* recurse with new path */
@@ -577,8 +593,7 @@ void preorder_dfs(char *path, struct bytestream *bs, uint8_t args)
 
 void extract_entry(struct header *head, int f_in, uint8_t options)
 {
-    char full_link[1024];
-    /*printf("starting extract entry \n");*/
+
     if (options & VERB_SET)
     {
         printf("%s\n", head->name);
@@ -658,9 +673,10 @@ void create_extra_dir(char extra_dirs[512])
     struct stat temp_stat;
     char temp_path[512];
     char path[512];
-
+    char *ptr;
     strcpy(path, extra_dirs);
-    char *ptr = strtok(path, delimiter);
+
+    ptr = strtok(path, delimiter);
     strcpy(temp_path, "");
 
     while (ptr != NULL)
@@ -680,6 +696,8 @@ void create_extra_dir(char extra_dirs[512])
 
         ptr = strtok(NULL, delimiter);
     }
+
+    free(ptr);
 }
 
 void extract_file(struct header *head, int f_in)
@@ -727,7 +745,7 @@ void extract_file(struct header *head, int f_in)
         /* read block of file into buffer*/
         if ((rd = read(f_in, buf, 512)) < 0)
         {
-            perror(f_in);
+            perror("read error");
             exit(1);
         }
         /*write contents of block to stream*/
@@ -752,6 +770,7 @@ void extract_file(struct header *head, int f_in)
     }
     /* attempt to read remaining null bits in block*/
     read(f_in, buf, 512 - remainder);
+    free(bs);
 }
 
 void skip_entry(struct header *head, int f_in)
@@ -759,7 +778,7 @@ void skip_entry(struct header *head, int f_in)
     int remainder;
     char buf[512];
     int blocks;
-    int i, rd, fd;
+    int i, rd;
     /*fprintf("skiping entry: %s", head->name);*/
     if (head->typeflag == '5' || head->typeflag == '2')
     {
@@ -774,7 +793,7 @@ void skip_entry(struct header *head, int f_in)
         /* read block of file into buffer*/
         if ((rd = read(f_in, buf, 512)) == -1)
         {
-            perror(f_in);
+            perror("read error");
             exit(1);
         }
 
@@ -803,11 +822,10 @@ void extract_archive(char *filename, uint8_t options,
         exit(1);
     }
 
-    while (head = read_header(f_in))
+    while ((head = read_header(f_in)))
     {
-        if ((options | LIST_SET) && contains(filenames,
-                                             argc, head->prefix, head->name) ||
-            argc == 0)
+        if (((options | LIST_SET) && (contains(filenames,
+            argc, head->prefix, head->name))) || argc == 0)
         {
             extract_entry(head, f_in, options);
         }
@@ -816,6 +834,8 @@ void extract_archive(char *filename, uint8_t options,
             /*skip entry*/
             skip_entry(head, f_in);
         }
+
+        free(head);
     }
     close(f_in);
 }

@@ -92,6 +92,10 @@ int main(int argc, char *argv[])
             strcpy(filenames[i - 3], argv[i]);
         }
         create_archive(filenames, argc - 3, argv[2], options);
+        for (i = 0; i < argc - 3; i++)
+        {
+            free(filenames[i]);
+        }
     }
 
     if (options & TOC_SET)
@@ -102,6 +106,10 @@ int main(int argc, char *argv[])
             strcpy(filenames[i - 3], argv[i]);
         }
         list_toc(argv[2], filenames, argc - 3, options);
+        for (i = 0; i < argc - 3; i++)
+        {
+            free(filenames[i]);
+        }
     }
 
     if (options & EXTRACT_SET)
@@ -112,6 +120,10 @@ int main(int argc, char *argv[])
             strcpy(filenames[i - 3], argv[i]);
         }
         extract_archive(argv[2], options, filenames, argc - 3);
+        for (i = 0; i < argc - 3; i++)
+        {
+            free(filenames[i]);
+        }
     }
 
     return 0;
