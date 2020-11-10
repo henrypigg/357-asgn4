@@ -314,6 +314,7 @@ void list_toc(char *archivefile, char **pathnames,
         {
             lseek(fd, offset, SEEK_CUR);
         }
+        free(head);
     }
 
     free(permissions);
